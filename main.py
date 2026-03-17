@@ -13,11 +13,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 
 from data.plugins.astrbot_plugin_afdian.core.afdian_api import AfdianAPIClient
 from data.plugins.astrbot_plugin_afdian.core.afdian_webhook import AfdianWebhookServer
-from data.plugins.astrbot_plugin_afdian.core.utils import (
-    parse_order,
-    parse_structured_payload,
-    parse_webhook_payload,
-)
+from data.plugins.astrbot_plugin_afdian.core.utils import parse_order, parse_sponsors
 
 
 @register(
@@ -77,13 +73,7 @@ class AfdianPlugin(Star):
     ):
         logger.info(f"New Afdian order received: {order}")
 
-        if payload:
-            message = parse_webhook_payload(payload)
-        elif order:
-            message = parse_order(order)
-        else:
-            message = "Afdian webhook test"
-
+        message = parse_order(order, payload) if order else "爱发电测试"
         image = await self.text_to_image(message)
 
         for session_id in set(self.notice_sessions):
@@ -144,14 +134,14 @@ class AfdianPlugin(Star):
             yield event.plain_result("爱发电客户端尚未初始化")
             return
 
-        response = await self.client.query_order_response(out_trade_no=out_trade_no)
-        orders = response.get("data", {}).get("list", [])
+        orders = await self.client.query_order(out_trade_no=out_trade_no)
         if not orders:
             yield event.plain_result("未找到该订单")
             return
 
-        image = await self.text_to_image(parse_structured_payload("API query-order response", response))
-        yield event.image_result(image)
+        for order in orders:
+            image = await self.text_to_image(parse_order(order))
+            yield event.image_result(image)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("查询发电", alias={"查询赞助"})
@@ -162,17 +152,14 @@ class AfdianPlugin(Star):
             yield event.plain_result("爱发电客户端尚未初始化")
             return
 
-        response = await self.client.query_sponsor_response(
-            sponsor_user_ids=sponsor_user_ids or ""
-        )
-        sponsors = response.get("data", {}).get("list", [])
+        sponsors = await self.client.query_sponsor(sponsor_user_ids=sponsor_user_ids or "")
         if not sponsors:
             yield event.plain_result("未找到赞助记录")
             return
 
-        image = await self.text_to_image(
-            parse_structured_payload("API query-sponsor response", response)
-        )
+        sponsor_list = parse_sponsors(sponsors)
+        sponsor_str = "\n\n".join(sponsor_list)
+        image = await self.text_to_image(sponsor_str)
         yield event.image_result(image)
 
     async def terminate(self):

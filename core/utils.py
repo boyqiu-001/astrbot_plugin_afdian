@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-import textwrap
 from typing import Any
 
 
 def format_time(timestamp: Any) -> str | None:
-    """Format a unix timestamp into local time."""
+    """格式化时间戳为日期时间字符串。"""
     if timestamp in (None, "", 0, "0"):
         return None
 
@@ -16,112 +15,45 @@ def format_time(timestamp: Any) -> str | None:
         return str(timestamp)
 
 
-def _stringify_scalar(value: Any) -> str:
-    if value is None:
-        return "null"
-    if value == "":
-        return '""'
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-def _append_scalar_lines(lines: list[str], key: str | None, value: Any, indent: int) -> None:
-    prefix = "  " * indent
-    text = _stringify_scalar(value)
-
-    if key is None:
-        wrapped = textwrap.wrap(
-            text,
-            width=92,
-            break_long_words=False,
-            break_on_hyphens=False,
-        ) or [text]
-        lines.extend(f"{prefix}{part}" for part in wrapped)
-        return
-
-    available_width = max(24, 92 - len(prefix) - len(key) - 2)
-    wrapped = textwrap.wrap(
-        text,
-        width=available_width,
-        break_long_words=False,
-        break_on_hyphens=False,
-    ) or [text]
-
-    lines.append(f"{prefix}{key}: {wrapped[0]}")
-    if len(wrapped) == 1:
-        return
-
-    continuation_prefix = f"{prefix}{' ' * (len(key) + 2)}"
-    for part in wrapped[1:]:
-        lines.append(f"{continuation_prefix}{part}")
-
-
-def _append_payload_lines(
-    lines: list[str], key: str | None, value: Any, indent: int = 0
-) -> None:
-    prefix = "  " * indent
-
+def has_custom_order_id(value: Any) -> bool:
+    """递归判断 payload 中是否存在 custom_order_id 字段。"""
     if isinstance(value, dict):
-        if key is not None:
-            lines.append(f"{prefix}{key}:")
-            indent += 1
-        if not value:
-            lines.append(f"{'  ' * indent}{{}}")
-            return
-        for child_key, child_value in value.items():
-            _append_payload_lines(lines, str(child_key), child_value, indent)
-        return
+        for key, child in value.items():
+            if str(key).lower() == "custom_order_id":
+                return True
+            if has_custom_order_id(child):
+                return True
+        return False
 
     if isinstance(value, list):
-        if key is not None:
-            lines.append(f"{prefix}{key}:")
-            indent += 1
-        if not value:
-            lines.append(f"{'  ' * indent}[]")
-            return
-        for index, item in enumerate(value):
-            _append_payload_lines(lines, f"[{index}]", item, indent)
-        return
+        return any(has_custom_order_id(item) for item in value)
 
-    _append_scalar_lines(lines, key, value, indent)
+    return False
 
 
-def parse_structured_payload(title: str, payload: Any) -> str:
-    """Render any structured payload into a readable text block."""
-    lines = [title]
-    _append_payload_lines(lines, None, payload)
-    return "\n".join(lines)
+def parse_order(order: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
+    """解析订单数据，生成摘要图片文本。"""
+    custom_exists = has_custom_order_id(payload if payload is not None else order)
 
-
-def parse_webhook_payload(payload: dict[str, Any]) -> str:
-    """Render the complete webhook payload into a readable text block."""
-    return parse_structured_payload("Webhook payload", payload)
-
-
-def parse_order(order: dict[str, Any]) -> str:
-    """Render a concise order summary."""
     fields = {
-        "Order No": order.get("out_trade_no"),
-        "Plan Title": order.get("plan_title"),
-        "User Name": order.get("user_name"),
-        "User ID": order.get("user_id"),
-        "Plan ID": order.get("plan_id"),
-        "Month": f"{order['month']} month(s)" if order.get("month") else None,
-        "Total Amount": order.get("total_amount"),
-        "Show Amount": order.get("show_amount"),
-        "Status": order.get("status"),
-        "Product Type": order.get("product_type"),
-        "Discount": order.get("discount"),
-        "Remark": order.get("remark"),
-        "Redeem ID": order.get("redeem_id"),
-        "Address Person": order.get("address_person"),
-        "Address Phone": order.get("address_phone"),
-        "Address Address": order.get("address_address"),
-        "Create Time": format_time(order.get("create_time")),
+        "交易号": order.get("out_trade_no"),
+        "计划标题": order.get("plan_title"),
+        "用户名": order.get("user_name"),
+        "用户ID": order.get("user_id"),
+        "计划ID": order.get("plan_id"),
+        "时长": f"{order['month']}个月" if order.get("month") else None,
+        "总金额": order.get("total_amount"),
+        "展示金额": order.get("show_amount"),
+        "订单状态": order.get("status"),
+        "产品类型": order.get("product_type"),
+        "折扣": order.get("discount"),
+        "备注": order.get("remark"),
+        "兑换码ID": order.get("redeem_id"),
+        "是否存在custom_order_id": "是" if custom_exists else "否",
+        "创建时间": format_time(order.get("create_time")),
     }
 
-    lines = ["Order info"]
+    lines = ["📦 订单信息："]
     lines.extend(
         f"- {key}: {value}"
         for key, value in fields.items()
@@ -129,22 +61,23 @@ def parse_order(order: dict[str, Any]) -> str:
     )
 
     sku_detail = order.get("sku_detail", [])
-    if sku_detail:
-        lines.append("- SKU Detail:")
-        for sku in sku_detail:
-            if not isinstance(sku, dict):
-                lines.append(f"  - {sku}")
-                continue
-            name = sku.get("name", "unknown")
-            count = sku.get("count", "N/A")
-            sku_id = sku.get("sku_id", "N/A")
-            lines.append(f"  - {name} x {count} (SKU ID: {sku_id})")
+    sku_lines = [
+        (
+            f"  - {sku.get('name', '未知')} × {sku.get('count', 'N/A')} "
+            f"(SKU ID: {sku.get('sku_id', 'N/A')})"
+        )
+        for sku in sku_detail
+        if isinstance(sku, dict) and any(sku.get(key) for key in ("name", "count", "sku_id"))
+    ]
+    if sku_lines:
+        lines.append("- SKU 列表：")
+        lines.extend(sku_lines)
 
     return "\n".join(lines)
 
 
 def parse_sponsors(data: dict[str, Any]) -> list[str]:
-    """Render sponsor information for image output."""
+    """解析赞助者数据，生成摘要图片文本。"""
     formatted_list: list[str] = []
 
     for item in data.get("list", []):
@@ -164,15 +97,11 @@ def parse_sponsors(data: dict[str, Any]) -> list[str]:
         }
 
         lines = [
-            f"Sponsor: {sponsor_info['name']} (ID: {sponsor_info['user_id']})",
-            (
-                "Current Plan: "
-                f"{sponsor_info['current_plan']['name']} "
-                f"({sponsor_info['current_plan']['price']:.2f})"
-            ),
-            f"First Pay: {sponsor_info['first_pay'] or 'N/A'}",
-            f"Last Pay: {sponsor_info['last_pay'] or 'N/A'}",
-            f"Total Amount: {sponsor_info['total_amount']:.2f}",
+            f"🎉 赞助主体： {sponsor_info['name']}（ID: {sponsor_info['user_id']}）\n",
+            f"📦 赞助方案：{sponsor_info['current_plan']['name']}（{sponsor_info['current_plan']['price']:.2f}）元\n",
+            f"📆 首次赞助：{sponsor_info['first_pay'] or 'N/A'}\n",
+            f"📆 最近赞助：{sponsor_info['last_pay'] or 'N/A'}\n",
+            f"💰 总计赞助：{sponsor_info['total_amount']:.2f}元",
         ]
 
         formatted_list.append("\n".join(lines))
